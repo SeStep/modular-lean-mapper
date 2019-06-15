@@ -1,0 +1,31 @@
+{
+  "name": "sestep/modular-lean-mapper",
+  "description": "Tharos\\LeanMapper implementation supporting entities in various namespaced modules",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Štěpán Ševčík",
+      "email": "Thoronir42@Gmail.com"
+    }
+  ],
+  "scripts": {
+    "test": "php ./vendor/phpunit/phpunIt/phpunit --bootstrap ./test/bootstrap.php --no-configuration ./test"
+  },
+  "require": {
+    "tharos/leanmapper": "^3.4"
+  },
+  "autoload": {
+    "psr-4": {
+      "SeStep\\ModularLeanMapper\\": "src/"
+    }
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^8.2"
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Test\\SeStep\\ModularLeanMapper\\": "test/"
+    }
+  }
+}
