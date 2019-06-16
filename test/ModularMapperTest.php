@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 use SeStep\ModularLeanMapper\Exceptions\ModuleNotFound;
 use SeStep\ModularLeanMapper\ModularMapper;
 
-class ModularUnderscoreMapperTest extends TestCase
+class ModularMapperTest extends TestCase
 {
     /** @var ModularMapper */
     private $service;
