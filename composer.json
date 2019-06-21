@@ -13,7 +13,8 @@
     "test": "php ./vendor/phpunit/phpunIt/phpunit --bootstrap ./test/bootstrap.php --no-configuration ./test"
   },
   "require": {
-    "tharos/leanmapper": "^3.4"
+    "tharos/leanmapper": "^3.4",
+    "nette/caching": "^3.0"
   },
   "autoload": {
     "psr-4": {

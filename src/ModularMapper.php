@@ -1,4 +1,4 @@
-<?php
+<?php declare(strict_types=1);
 
 namespace SeStep\ModularLeanMapper;
 
@@ -6,135 +6,127 @@ use InvalidArgumentException;
 use LeanMapper\Caller;
 use LeanMapper\IMapper;
 use LeanMapper\Row;
+use Nette\Caching\Cache;
+use Nette\Caching\Storages\MemoryStorage;
 use SeStep\ModularLeanMapper\Exceptions\ModuleNotFound;
+use UnexpectedValueException;
 
 
-class ModularMapper implements IMapper
+final class ModularMapper implements IMapper
 {
     /** @var IMapper */
     private $mapper;
 
-
-    private $moduleTableNameGlue = '__';
-
-    /** @var string */
-    private $moduleNamespaceMask;
-    /** @var string */
-    private $moduleEntityMask;
-    /** @var string */
-    private $moduleRepositoryMask;
-
+    /** @var MapperModule[] */
     private $modules;
-    private $classToTableCache = [];
 
-    public function __construct(IMapper $mapper, string $moduleNamespaceMask, array $modules = [])
+    /** @var Cache */
+    private $cache;
+
+    /**
+     * ModularMapper constructor.
+     * @param IMapper $mapper
+     * @param MapperModule[]|string[] $modules
+     * @param Cache|null $cache
+     */
+    public function __construct(IMapper $mapper, array $modules = [], Cache $cache = null)
     {
-        if($moduleNamespaceMask{-1} != '\\') $moduleNamespaceMask .= '\\';
-
-        $this->moduleNamespaceMask = $moduleNamespaceMask;
-        $this->modules = $modules;
-
-        $this->setModuleEntitiesNamespace('Model');
-        $this->setModuleRepositoryNamespace('Repositories');
-
         $this->mapper = $mapper;
-    }
+        $this->cache = $cache ?: new Cache(new MemoryStorage());
+        $this->modules = [];
 
-    /**
-     * @param string $entityNamespace - child namespace from the resolved module where the entities are
-     */
-    public function setModuleEntitiesNamespace(string $entityNamespace)
-    {
-        $this->moduleEntityMask = $this->moduleNamespaceMask . $entityNamespace . '\\';
-    }
+        foreach ($modules as $prefix => $module) {
+            if (!is_string($prefix)) {
+                throw new InvalidArgumentException("All modules must have a string prefix. '$prefix' given");
+            }
 
-    /**
-     * @param $repositoryNamespace - child namespace from the resolved module where the repositories are
-     */
-    public function setModuleRepositoryNamespace($repositoryNamespace)
-    {
-        $this->moduleRepositoryMask = $this->moduleNamespaceMask . $repositoryNamespace . '\\';
+            if ($module instanceof MapperModule) {
+                $this->modules[$prefix] = $module;
+                continue;
+            }
+
+            if (is_string($module)) {
+                $this->modules[$prefix] = MapperModule::create($module);
+                continue;
+            }
+
+            $type = is_object($module) ? get_class($module) : gettype($module);
+            throw new UnexpectedValueException("Module must be either string or " . MapperModule::class . ". Got: $type");
+        }
     }
 
     public function getTable($entityClass): string
     {
-        if (!isset($this->classToTableCache[$entityClass])) {
-            $modulePattern = str_replace('\\', '\\\\', $this->moduleEntityMask);
-            $modulePattern = str_replace('<module>', '(\\w+)', $modulePattern);
+        return $this->cache->load('entityToTable-' . $entityClass, function () use ($entityClass) {
+            $tablePrefix = null;
 
-            $module = null;
+            foreach ($this->modules as $prefix => $module) {
+                if (!$module->containsEntity($entityClass)) {
+                    continue;
+                }
 
-            $matches = [];
-            if (preg_match("/$modulePattern/", $entityClass, $matches)) {
-                $module = $this->tablePrefixByAppModule($matches[1]);
+                $tablePrefix = $prefix;
+                break;
             }
 
+            if (is_null($tablePrefix)) {
+                throw new ModuleNotFound();
+            }
 
-            $table = ($module ? $module . $this->moduleTableNameGlue : '') . $this->mapper->getTable($entityClass);
-            $this->classToTableCache[$entityClass] = $table;
-        }
-
-
-        return $this->classToTableCache[$entityClass];
+            return $tablePrefix . $this->mapper->getTable($entityClass);
+        });
     }
 
     public function getEntityClass($table, Row $row = null)
     {
-        $parts = explode($this->moduleTableNameGlue, $table, 2);
-        if (count($parts) === 2) {
-            $module = $this->appModuleByTablePrefix($parts[0]);
-            $table = $parts[1];
+        $module = $this->findModuleByTable($table, $nonPrefixedTable);
 
-            $entityClass = ucfirst($this->mapper->getEntityClass($table, $row));
-            $entityClass = str_replace('<module>', $module, $this->moduleEntityMask) . $entityClass;
-        } else {
-            $entityClass = $this->mapper->getEntityClass($table, $row);
+        if ($module) {
+            if ($entityClass = $module->getEntityClass($table, $row)) {
+                return $entityClass;
+            }
+
+            return $module->getEntityNamespace() . '\\' . $this->mapper->getEntityClass($nonPrefixedTable, $row);
         }
 
-        return $entityClass;
+        return $this->mapper->getEntityClass($table, $row);
     }
 
     public function getTableByRepositoryClass($repositoryClass)
     {
-        $modulePattern = str_replace('\\', '\\\\', $this->moduleRepositoryMask);
-        $modulePattern = str_replace('<module>', '(\\w+)', $modulePattern);
+        return $this->cache->load('repoToTable-' . $repositoryClass, function () use ($repositoryClass) {
+            $tablePrefix = '';
 
-        $matches = [];
-        $str = '#(^' . $modulePattern . '.*?)?([a-z0-9]+)repository$#i';
-        if (!preg_match($str, $repositoryClass, $matches)) {
-            throw new InvalidArgumentException("Cannot determine table name for class. '$repositoryClass'");
-        }
+            foreach ($this->modules as $prefix => $module) {
+                if (!$module->containsRepo($repositoryClass)) {
+                    continue;
+                }
 
-        $module = $matches[2];
-
-
-        $table = $this->mapper->getTableByRepositoryClass($repositoryClass);
-        if ($module) {
-            $table = $this->tablePrefixByAppModule($module) . $this->moduleTableNameGlue . $table;
-        }
-
-        return $table;
-    }
-
-
-    private function tablePrefixByAppModule(string $module): string
-    {
-        foreach ($this->modules as $tm => $am) {
-            if ($am == $module) {
-                return $tm;
+                $tablePrefix = $prefix;
+                break;
             }
-        }
 
-        throw new ModuleNotFound("Module '$module' is not recognized. Did you register it via constructor?");
+            return $tablePrefix . $this->mapper->getTableByRepositoryClass($repositoryClass);
+        });
     }
 
-    private function appModuleByTablePrefix(string $module): string
+    private function findModuleByTable(string $table, &$nonPrefixedTable = null): ?MapperModule
     {
-        if (!isset($this->modules[$module])) {
-            throw new ModuleNotFound("Table prefix '$module' does not exist. Did you register it via constructor?");
-        }
+        $key = $this->cache->load('tableToModuleKey-' . $table, function () use ($table) {
+            foreach ($this->modules as $prefix => $module) {
+                if (empty($prefix) || strpos($table, $prefix) === 0) {
+                    return $prefix;
+                }
+            }
+            return null;
+        });
 
-        return $this->modules[$module];
+        if (!is_null($key)) {
+            $nonPrefixedTable = substr($table, strlen($key));
+            return $this->modules[$key];
+        } else {
+            return null;
+        }
     }
 
     public function getRelationshipColumn($sourceTable, $targetTable)
